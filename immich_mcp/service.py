@@ -413,7 +413,7 @@ class Service:
 
     # ------------------------------------------------------------------ tags
     async def _all_tags(self) -> list[dict]:
-        if not hasattr(self, "_tags_cache") or time.monotonic() - self._tags_cache[0] > 600:
+        if not hasattr(self, "_tags_cache") or time.monotonic() - self._tags_cache[0] > 600:   # [0] = -inf: reload
             self._tags_cache = (time.monotonic(), await self.immich.tags())
         return self._tags_cache[1]
 
@@ -442,7 +442,7 @@ class Service:
         if not create:
             return None
         t = await self.immich.create_tag(name)
-        self._tags_cache = (0, [])
+        self._tags_cache = (float("-inf"), [])
         audit("create_tag", tag_id=t["id"], name=name)
         return t["id"]
 

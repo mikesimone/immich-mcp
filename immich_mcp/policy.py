@@ -22,14 +22,14 @@ class Policy:
         self.cfg, self.immich = cfg, immich
         self.album_ttl, self.asset_ttl = album_ttl, asset_ttl
         self._albums: list[dict] = []
-        self._albums_at = 0.0
+        self._albums_at = float("-inf")     # never loaded (monotonic() starts near 0 on a fresh boot)
         self._assets: set[str] = set()
         self._people: dict[str, dict] = {}
-        self._assets_at = 0.0
+        self._assets_at = float("-inf")
         self._lock = asyncio.Lock()
 
     def invalidate(self):
-        self._albums_at = self._assets_at = 0.0
+        self._albums_at = self._assets_at = float("-inf")
 
     async def visible_albums(self) -> list[dict]:
         if time.monotonic() - self._albums_at > self.album_ttl:
