@@ -47,6 +47,7 @@ If you use ChatGPT, everything a tool returns, images included, goes to OpenAI. 
 | `create_album` / `update_album` | Create, rename, or re-describe albums |
 | `add_assets_to_album` / `remove_assets_from_album` | Album membership (removal needs `confirm=true`, originals kept) |
 | `upload_asset` / `upload_assets` | One file / a batch, into an album; returns asset IDs and per-item results |
+| `begin_upload` / `upload_chunk` / `finish_upload` | Files too big for one request (long videos), sent in pieces |
 | `get_upload_status` | Outcome of an earlier upload |
 | `set_caption` / `update_asset_metadata` | Captions (replace or append), favorite, rating, capture date |
 | `set_archived` | Take photos off the timeline, or put them back |
@@ -130,7 +131,11 @@ connector forwards override static ones.)
 
 ## Uploads and getting bytes in
 
-- `data_base64`: bytes sent by the client, capped at `MAX_BASE64_BYTES` (7 MiB decoded by default).
+- `data_base64`: bytes sent by the client, capped per request at `MAX_BASE64_BYTES` (32 MiB decoded by default; base64
+  adds a third on the wire, so behind Cloudflare's 100 MB request cap the practical maximum is about 64 MiB).
+- Chunked: `begin_upload` (name, exact size, album, optional SHA-256), then `upload_chunk` for pieces 0..n-1 (each up to
+  `MAX_BASE64_BYTES`; re-sending a piece is harmless), then `finish_upload`, which verifies and stores it like any other
+  upload, up to `MAX_UPLOAD_BYTES` (200 MiB default). Pieces live under `STATE_DIR/chunks`; sessions expire after 24 h.
 - `url`: the server downloads a **public https** URL. SSRF protections: no credentials or literal IPs, every DNS
   answer must be a public address, the connection is pinned to the checked IP (no DNS rebinding) with TLS still
   verified against the hostname, each redirect hop is re-checked, the body is size-capped, and the content must sniff

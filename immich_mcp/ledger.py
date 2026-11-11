@@ -20,6 +20,9 @@ CREATE INDEX IF NOT EXISTS uploads_sha256 ON uploads(sha256);
 CREATE TABLE IF NOT EXISTS album_adds (
   upload_id TEXT NOT NULL, album_id TEXT NOT NULL, status TEXT NOT NULL, error TEXT, updated REAL NOT NULL,
   PRIMARY KEY (upload_id, album_id));
+CREATE TABLE IF NOT EXISTS chunk_sessions (
+  session_id TEXT PRIMARY KEY, filename TEXT, mime TEXT, total_bytes INTEGER NOT NULL, sha256 TEXT,
+  album_id TEXT NOT NULL, taken_at TEXT, description TEXT, principal TEXT, created REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS share_links (
   link_id TEXT PRIMARY KEY, url TEXT NOT NULL, asset_ids TEXT NOT NULL, expires_at TEXT,
   created_by TEXT, created REAL NOT NULL, revoked REAL);
@@ -83,3 +86,24 @@ class Ledger:
     def revoke_share_link(self, link_id):
         with self._lock:
             self._db.execute("UPDATE share_links SET revoked=? WHERE link_id=?", (time.time(), link_id))
+
+    def add_chunk_session(self, session_id, filename, mime, total_bytes, sha256, album_id, taken_at, description, principal):
+        with self._lock:
+            self._db.execute("INSERT INTO chunk_sessions(session_id,filename,mime,total_bytes,sha256,album_id,taken_at,"
+                             "description,principal,created) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                             (session_id, filename, mime, total_bytes, sha256, album_id, taken_at, description, principal,
+                              time.time()))
+
+    def chunk_session(self, session_id) -> dict | None:
+        with self._lock:
+            r = self._db.execute("SELECT * FROM chunk_sessions WHERE session_id=?", (session_id,)).fetchone()
+            return dict(r) if r else None
+
+    def drop_chunk_session(self, session_id):
+        with self._lock:
+            self._db.execute("DELETE FROM chunk_sessions WHERE session_id=?", (session_id,))
+
+    def expired_chunk_sessions(self, older_than: float) -> list[str]:
+        with self._lock:
+            return [r[0] for r in self._db.execute("SELECT session_id FROM chunk_sessions WHERE created < ?",
+                                                   (time.time() - older_than,))]

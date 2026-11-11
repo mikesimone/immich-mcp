@@ -54,7 +54,7 @@ class Config:
     # State + limits
     state_dir: str = "/var/lib/immich-mcp"
     max_upload_bytes: int = 200 * 1024 * 1024     # one asset
-    max_base64_bytes: int = 7 * 1024 * 1024       # decoded; keeps requests under the 10 MiB tunnel envelope
+    max_base64_bytes: int = 32 * 1024 * 1024      # decoded, per request (base64 adds 1/3 on the wire). Bigger files: chunked upload.
     max_image_return_bytes: int = 2 * 1024 * 1024
     url_fetch_allowed_hosts: tuple[str, ...] = ()  # empty = any public host (SSRF rules still apply)
     url_fetch_timeout: float = 60.0

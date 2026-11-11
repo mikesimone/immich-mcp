@@ -25,6 +25,7 @@ Sharing: create_share_link makes an expiring link to send someone (if enabled; n
 list_albums / get_album to browse, get_asset for details, get_asset_image to actually look at a picture.
 
 Uploading: upload_assets uploads many items into one album in one call (best for an email's worth of images);
+files bigger than the base64 limit (long videos) go in pieces: begin_upload, upload_chunk x N, finish_upload;
 upload_asset takes ONE source: data_base64 (small images, up to the server's base64 limit),
 url (a public https URL the server can fetch), or file (a ChatGPT file object with download_url). Every upload
 must name a target album (album_id, or album_name which is created if missing and must use an allowed prefix),
@@ -270,6 +271,25 @@ class BatchOut(TypedDict):
     results: list[BatchRow]
 
 
+class BeginUploadOut(TypedDict):
+    upload_session: str
+    total_bytes: int
+    max_chunk_bytes: int
+    suggested_chunk_bytes: int
+    chunks_needed: int
+    expires_in_hours: int
+    album: AlbumRef
+
+
+class ChunkOut(TypedDict):
+    upload_session: str
+    index: int
+    chunk_bytes: int
+    received_bytes: int
+    total_bytes: int
+    chunks_received: list[int]
+
+
 class ShareLinkOut(TypedDict):
     link_id: str
     url: str
@@ -448,6 +468,35 @@ def build(service: Service) -> MCPServer:
         return await run(service.upload_asset(album_id=album_id, album_name=album_name, data_base64=data_base64, url=url,
                                               file=file, filename=filename, mime_type=mime_type, taken_at=taken_at,
                                               description=description))
+
+    @tool(title="Start a large upload", annotations=WRITE,
+          description="For a file too big for one upload_asset call (e.g. a long video): start a session, then send the "
+                      "file in pieces with upload_chunk (index 0, 1, 2, ...) and call finish_upload. Give the exact total size; "
+                      "sha256 is optional but lets the server verify the result.")
+    async def begin_upload(filename: Annotated[str, Field(description="File name to store", min_length=1, max_length=200)],
+                           total_bytes: Annotated[int, Field(description="Exact size of the whole file in bytes", ge=1)],
+                           album_id: Annotated[Optional[str], Field(description="Target album ID")] = None,
+                           album_name: Annotated[Optional[str], Field(description="Target album name; created if missing")] = None,
+                           mime_type: Annotated[Optional[str], Field(description="Declared MIME type (content is sniffed regardless)")] = None,
+                           sha256: Annotated[Optional[str], Field(description="SHA-256 hex of the whole file, to verify")] = None,
+                           taken_at: Annotated[Optional[str], Field(description="ISO 8601 capture date")] = None,
+                           description: Annotated[Optional[str], Field(description="Caption for the new asset")] = None) -> BeginUploadOut:
+        return await run(service.begin_upload(filename=filename, total_bytes=total_bytes, mime_type=mime_type, sha256=sha256,
+                                              album_id=album_id, album_name=album_name, taken_at=taken_at, description=description))
+
+    @tool(title="Send a piece of a large upload", annotations=WRITE,
+          description="Send one piece (base64) of a file started with begin_upload. Pieces are numbered from 0; re-sending a "
+                      "piece replaces it, so retries are safe.")
+    async def upload_chunk(upload_session: Annotated[str, Field(description="upload_session from begin_upload")],
+                           index: Annotated[int, Field(description="Piece number, starting at 0", ge=0)],
+                           data_base64: Annotated[str, Field(description="This piece's bytes, base64")]) -> ChunkOut:
+        return await run(service.upload_chunk(upload_session, index, data_base64))
+
+    @tool(title="Finish a large upload", annotations=WRITE,
+          description="Assemble the pieces, verify size (and sha256 if given), and store the file in the session's album. "
+                      "Returns the same result as upload_asset.")
+    async def finish_upload(upload_session: Annotated[str, Field(description="upload_session from begin_upload")]) -> UploadOut:
+        return await run(service.finish_upload(upload_session))
 
     @tool(title="Upload status", annotations=RO,
               description="Outcome of an earlier upload, by upload_id (or the file's SHA-256): status, asset_id, album assignments.")

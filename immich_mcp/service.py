@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import logging
+import re
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -379,6 +380,88 @@ class Service:
                 results.append({"index": i, "status": "failed", "upload_id": None, "asset_id": None, "filename": None,
                                 "album_status": None, "error": f"[{kind_}] {getattr(e, 'message', str(e))}"})
         return {"album": {"id": album["id"], "name": album["albumName"]}, "counts": counts, "results": results}
+
+    # ------------------------------------------------------------------ chunked uploads (files bigger than one request)
+    CHUNK_TTL = 24 * 3600
+
+    def _chunk_dir(self, session_id: str):
+        from pathlib import Path
+        return Path(self.cfg.state_dir) / "chunks" / session_id
+
+    def _expire_chunk_sessions(self):
+        import shutil
+        for sid in self.ledger.expired_chunk_sessions(self.CHUNK_TTL):
+            shutil.rmtree(self._chunk_dir(sid), ignore_errors=True)
+            self.ledger.drop_chunk_session(sid)
+
+    async def begin_upload(self, *, filename, total_bytes, mime_type, sha256, album_id, album_name, taken_at,
+                           description) -> dict:
+        import uuid
+        self._expire_chunk_sessions()
+        total = int(total_bytes)
+        if total < 1 or total > self.cfg.max_upload_bytes:
+            raise ToolFailure("too_large" if total > 0 else "bad_request",
+                              f"total_bytes must be 1..{self.cfg.max_upload_bytes}")
+        if sha256 and not re.fullmatch(r"[0-9a-fA-F]{64}", sha256):
+            raise ToolFailure("bad_request", "sha256 must be 64 hex characters")
+        album = await self._resolve_album(album_id, album_name, create=True)
+        sid = "us_" + uuid.uuid4().hex
+        self._chunk_dir(sid).mkdir(parents=True, exist_ok=True)
+        self.ledger.add_chunk_session(sid, filename, mime_type, total, (sha256 or "").lower() or None, album["id"],
+                                      taken_at, description, principal.get())
+        chunk = min(self.cfg.max_base64_bytes, 16 * 1024 * 1024)
+        return {"upload_session": sid, "total_bytes": total, "max_chunk_bytes": self.cfg.max_base64_bytes,
+                "suggested_chunk_bytes": chunk, "chunks_needed": -(-total // chunk), "expires_in_hours": 24,
+                "album": {"id": album["id"], "name": album["albumName"]}}
+
+    def _session(self, session_id: str) -> dict:
+        row = self.ledger.chunk_session(session_id)
+        if not row or row["principal"] != principal.get():
+            raise ToolFailure("not_found", "no such upload session (it may have expired)")
+        return row
+
+    def _received(self, session_id: str) -> tuple[int, list[int]]:
+        files = sorted(self._chunk_dir(session_id).glob("*.part"))
+        return sum(f.stat().st_size for f in files), [int(f.stem) for f in files]
+
+    async def upload_chunk(self, upload_session: str, index: int, data_base64: str) -> dict:
+        row = self._session(upload_session)
+        if index < 0 or index > 100000:
+            raise ToolFailure("bad_request", "index must be 0..100000")
+        if len(data_base64) > self.cfg.max_base64_bytes * 4 // 3 + 8:
+            raise ToolFailure("too_large", f"a chunk may be at most {self.cfg.max_base64_bytes} bytes")
+        try:
+            data = base64.b64decode(re.sub(r"\s+", "", data_base64), validate=True)
+        except (ValueError, TypeError):
+            raise ToolFailure("bad_request", "data_base64 is not valid base64")
+        if not data:
+            raise ToolFailure("bad_request", "empty chunk")
+        part = self._chunk_dir(upload_session) / f"{index:06d}.part"
+        part.write_bytes(data)                      # re-sending the same index just replaces it
+        got, idx = self._received(upload_session)
+        if got > row["total_bytes"]:
+            part.unlink()
+            raise ToolFailure("bad_request", f"chunks now exceed total_bytes ({row['total_bytes']}); chunk {index} discarded")
+        return {"upload_session": upload_session, "index": index, "chunk_bytes": len(data),
+                "received_bytes": got, "total_bytes": row["total_bytes"], "chunks_received": idx}
+
+    async def finish_upload(self, upload_session: str) -> dict:
+        import shutil
+        row = self._session(upload_session)
+        got, idx = self._received(upload_session)
+        if idx != list(range(len(idx))):
+            raise ToolFailure("bad_request", f"chunks must be numbered 0..n-1 with no gaps; have {idx}")
+        if got != row["total_bytes"]:
+            raise ToolFailure("bad_request", f"received {got} of {row['total_bytes']} bytes; send the missing chunks")
+        data = b"".join((self._chunk_dir(upload_session) / f"{i:06d}.part").read_bytes() for i in idx)
+        if row["sha256"] and hashlib.sha256(data).hexdigest() != row["sha256"]:
+            raise ToolFailure("bad_request", "sha256 of the assembled file doesn't match; re-send the chunks")
+        media = check_media(data, row["filename"], row["mime"], self.cfg.max_upload_bytes)
+        album = await self.policy.album(row["album_id"])
+        result = await self.store(media, "chunked", album, taken_at=row["taken_at"], description=row["description"])
+        shutil.rmtree(self._chunk_dir(upload_session), ignore_errors=True)
+        self.ledger.drop_chunk_session(upload_session)
+        return result
 
     # ------------------------------------------------------------------ share links
     async def create_share_link(self, asset_ids: list[str], expires_in_hours: int, allow_download: bool,

@@ -49,7 +49,7 @@ async def main():
                 init = await s.initialize()
                 ok("initialize", init.server_info.name == "immich", init.server_info.name)
                 tools = {t.name for t in (await s.list_tools()).tools}
-                ok("tool discovery", len(tools) >= 25, f"{len(tools)} tools")
+                ok("tool discovery", len(tools) >= 28, f"{len(tools)} tools")
                 info = (await s.call_tool("get_server_info", {})).structured_content
                 ok("server info", bool(info and info.get("immich_version")), json.dumps(info)[:160])
                 albums = (await s.call_tool("list_albums", {"page_size": 5})).structured_content
