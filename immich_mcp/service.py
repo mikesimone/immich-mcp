@@ -86,6 +86,8 @@ class Service:
         return {
             "server": "immich-mcp", "immich_version": await self.immich.version(),
             "visible_album_prefixes": list(self.cfg.allowed_album_prefixes),
+            "excluded_album_prefixes": list(self.cfg.excluded_album_prefixes),
+            "includes_assets_without_album": self.cfg.include_assets_without_album,
             "visible_album_count": len(await self.policy.visible_albums()),
             "limits": {"max_upload_bytes": self.cfg.max_upload_bytes, "max_base64_bytes": self.cfg.max_base64_bytes,
                        "max_page_size": PAGE_MAX},
@@ -108,7 +110,9 @@ class Service:
         a = await self.policy.album(album_id)
         r = await self.immich.search_metadata({"albumIds": [album_id], "page": page, "size": size,
                                                "order": "asc", "withExif": True})
-        return {"album": _album_summary(a), "assets": [_asset_summary(x) for x in r["items"]], "page": page,
+        visible = await self.policy.visible_asset_ids()
+        return {"album": _album_summary(a), "assets": [_asset_summary(x) for x in r["items"] if x["id"] in visible],
+                "page": page,
                 "next_page": int(r["nextPage"]) if r.get("nextPage") else None}
 
     async def search_assets(self, *, query, filename, description, asset_type, taken_after, taken_before,
@@ -138,7 +142,7 @@ class Service:
         search = self.immich.search_smart if query else self.immich.search_metadata
         if query:
             body["query"] = query
-        visible = None if album_id else await self.policy.visible_asset_ids()
+        visible = await self.policy.visible_asset_ids()     # always: an allowed album can hold excluded assets
         want_from, want_to = (page - 1) * size, page * size
         hits, scanned, ipage, more = [], 0, 1, True
         while more and len(hits) < want_to + 1 and scanned < self.cfg.search_scan_limit:

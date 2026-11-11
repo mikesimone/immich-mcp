@@ -17,13 +17,22 @@ What it can do:
 - **Share**: optional expiring share links with metadata hidden.
 - **Delete safely**: deletes only ever go to Immich's trash, and destructive tools need `confirm=true`.
 
-## The allow-list (read this first)
+## What clients can see (read this first)
 
-A photo library is personal. This server only shows clients the albums whose names start with one of the prefixes in
-`ALLOWED_ALBUM_PREFIXES`, and only the assets inside those albums. Everything else behaves as if it doesn't exist:
-search results are filtered, direct IDs return `not_found`, people and tags are only listed if they appear in visible
-photos, you can't pull a hidden photo into a visible album, and new albums must use an allowed prefix. `*` exposes
-every album. There is deliberately no default.
+A photo library is personal, so visibility works like firewall rules:
+
+- `ALLOWED_ALBUM_PREFIXES` (required): albums whose names start with one of these prefixes are visible, along with the
+  photos in them. `*` means every album.
+- `EXCLUDED_ALBUM_PREFIXES` (optional) **always wins**: albums matching it are hidden, and so is every photo in them,
+  even a photo that is also in an allowed album.
+- `INCLUDE_ASSETS_WITHOUT_ALBUM=true` (optional) also shows photos that are in no album. If you don't organize with
+  albums, `ALLOWED_ALBUM_PREFIXES=*` + `INCLUDE_ASSETS_WITHOUT_ALBUM=true` + an exclude list means "my whole library
+  except these albums".
+
+Anything not visible behaves as if it doesn't exist: search results are filtered, direct IDs return `not_found`,
+people and tags are only listed if they appear in visible photos, you can't pull a hidden photo into a visible album,
+and new or renamed albums must stay inside the rules. Locked-folder assets are never visible. Changes made outside the
+server (a photo you just filed into an excluded album) are picked up within 5 minutes or on restart.
 
 If you use ChatGPT, everything a tool returns, images included, goes to OpenAI. Choose the allow-list with that in mind.
 

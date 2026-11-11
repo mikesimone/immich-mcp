@@ -108,6 +108,8 @@ class FakeImmich:
                 items = [a for a in items if a["id"] in self.members[aid]]
             if body.get("originalFileName"):
                 items = [a for a in items if body["originalFileName"].lower() in a["originalFileName"].lower()]
+            if body.get("isNotInAlbum"):
+                items = [a for a in items if not any(a["id"] in m for m in self.members.values())]
             for pid in body.get("personIds", []):
                 items = [a for a in items if any(p["id"] == pid for p in a["people"])]
             for tid in body.get("tagIds", []):

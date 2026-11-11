@@ -30,6 +30,12 @@ class Config:
     # What a connected client may see: albums whose names start with one of these prefixes ("*" = every album).
     # Required: there is no safe default for someone else's library.
     allowed_album_prefixes: tuple[str, ...] = ()
+    # Deny list that overrides the allow list (firewall-style): an asset in ANY album matching one of these is
+    # hidden, even if it is also in an allowed album. Albums matching it are hidden too.
+    excluded_album_prefixes: tuple[str, ...] = ()
+    # Also show assets that are in no album at all (for libraries that don't use albums much). With
+    # ALLOWED_ALBUM_PREFIXES=* this means "the whole library minus excluded albums".
+    include_assets_without_album: bool = False
 
     # Auth at the MCP boundary: "token" (loopback HTTP: tunnel-client, Claude Code),
     # "cloudflare" (Cloudflare Access JWT, for a later public endpoint), "none" (stdio / tests only).
@@ -73,6 +79,8 @@ class Config:
         c.immich_url = e("IMMICH_URL", c.immich_url).rstrip("/")
         c.immich_api_key_file = e("IMMICH_API_KEY_FILE", c.immich_api_key_file)
         c.allowed_album_prefixes = _list("ALLOWED_ALBUM_PREFIXES", ",".join(c.allowed_album_prefixes))
+        c.excluded_album_prefixes = _list("EXCLUDED_ALBUM_PREFIXES")
+        c.include_assets_without_album = e("INCLUDE_ASSETS_WITHOUT_ALBUM", "false").lower() in ("1", "true", "yes")
         c.auth_mode = e("AUTH_MODE", c.auth_mode)
         c.token_file = e("TOKEN_FILE", c.token_file)
         c.cf_team_domain = e("CF_ACCESS_TEAM_DOMAIN", c.cf_team_domain)
@@ -98,7 +106,13 @@ class Config:
             raise RuntimeError(f"no Immich API key ({self.immich_api_key_file} missing)")
         return key
 
+    def album_excluded(self, name: str) -> bool:
+        return any(name.startswith(p) for p in self.excluded_album_prefixes)
+
     def album_allowed(self, name: str) -> bool:
+        """Visible album: matches the allow list and NOT the exclude list (exclude wins)."""
+        if self.album_excluded(name):
+            return False
         if "*" in self.allowed_album_prefixes:
             return True
         return any(name.startswith(p) for p in self.allowed_album_prefixes)

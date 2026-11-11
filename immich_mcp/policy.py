@@ -43,21 +43,35 @@ class Policy:
         async with self._lock:
             if time.monotonic() - self._assets_at > self.asset_ttl:
                 ids: set[str] = set()
-                people: dict[str, dict] = {}
-                per_person: dict[str, set] = {}
-                for a in await self.visible_albums():
+                rows: dict[str, list] = {}          # asset id -> its people
+                excluded: set[str] = set()
+
+                async def scan(body: dict, into_ids: bool):
                     page = 1
                     while page:
-                        r = await self.immich.search_metadata({"albumIds": [a["id"]], "size": 1000, "page": page,
-                                                               "withPeople": True})
+                        r = await self.immich.search_metadata({**body, "size": 1000, "page": page, "withPeople": True})
                         for x in r["items"]:
-                            ids.add(x["id"])
-                            for p in x.get("people") or []:
-                                people.setdefault(p["id"], {"id": p["id"], "name": p.get("name") or ""})
-                                per_person.setdefault(p["id"], set()).add(x["id"])
+                            if into_ids:
+                                ids.add(x["id"])
+                                rows[x["id"]] = x.get("people") or []
+                            else:
+                                excluded.add(x["id"])
                         page = int(r["nextPage"]) if r.get("nextPage") else 0
-                for pid, assets in per_person.items():
-                    people[pid]["photo_count"] = len(assets)
+
+                for a in await self.visible_albums():
+                    await scan({"albumIds": [a["id"]]}, True)
+                if self.cfg.include_assets_without_album:
+                    await scan({"isNotInAlbum": True}, True)
+                if self.cfg.excluded_album_prefixes:      # deny wins: drop anything that is also in an excluded album
+                    for a in await self.immich.albums():
+                        if self.cfg.album_excluded(a["albumName"]):
+                            await scan({"albumIds": [a["id"]]}, False)
+                ids -= excluded
+                people: dict[str, dict] = {}
+                for aid in ids:
+                    for p in rows.get(aid, []):
+                        e = people.setdefault(p["id"], {"id": p["id"], "name": p.get("name") or "", "photo_count": 0})
+                        e["photo_count"] += 1
                 self._assets, self._people, self._assets_at = ids, people, time.monotonic()
             return self._assets
 
@@ -86,10 +100,15 @@ class Policy:
     async def is_visible(self, asset_id: str) -> bool:
         if asset_id in await self.visible_asset_ids():
             return True
-        try:   # cache may be stale (just uploaded/added): ask Immich directly
-            return any(self.cfg.album_allowed(a["albumName"]) for a in await self.immich.albums(asset_id))
+        try:   # cache may be stale (just uploaded/added): ask Immich directly. Exclude wins.
+            names = [a["albumName"] for a in await self.immich.albums(asset_id)]
         except ImmichError:
             return False
+        if any(self.cfg.album_excluded(n) for n in names):
+            return False
+        if any(self.cfg.album_allowed(n) for n in names):
+            return True
+        return not names and self.cfg.include_assets_without_album
 
     async def require_assets(self, ids: list[str]) -> None:
         hidden = [i for i in ids if not await self.is_visible(i)]

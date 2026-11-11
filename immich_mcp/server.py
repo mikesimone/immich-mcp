@@ -12,8 +12,9 @@ from pydantic import Field
 
 from .service import Service, ToolFailure
 
-INSTRUCTIONS = """A private Immich photo library. You only see albums on an allow-list (album names starting with
-the listed number prefixes) and the assets inside them; everything else behaves as if it doesn't exist.
+INSTRUCTIONS = """A private Immich photo library. You only see what the owner exposes: albums whose names match an allow-list
+(minus an exclude list that always wins) and the assets inside them, plus optionally assets in no album. Everything
+else behaves as if it doesn't exist.
 
 Editing: update_album renames albums or edits their description; set_caption writes or appends photo captions;
 set_archived moves photos off/onto the timeline; tag_assets/untag_assets manage tags.
@@ -120,6 +121,8 @@ class ServerInfo(TypedDict):
     server: str
     immich_version: str
     visible_album_prefixes: list[str]
+    excluded_album_prefixes: list[str]
+    includes_assets_without_album: bool
     visible_album_count: int
     limits: Limits
     upload_sources: list[str]
