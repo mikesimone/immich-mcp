@@ -1,0 +1,41 @@
+[Unit]
+Description=Immich MCP server
+Documentation=https://github.com/mikesimone/immich-mcp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=immich-mcp
+Group=immich-mcp
+EnvironmentFile=/etc/immich-mcp/immich-mcp.env
+StateDirectory=immich-mcp
+StateDirectoryMode=0700
+ExecStart=/opt/immich-mcp/venv/bin/immich-mcp
+Restart=on-failure
+RestartSec=5
+
+# Hardening: loopback listener + outbound HTTPS for URL ingestion, no home dirs, no capabilities.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

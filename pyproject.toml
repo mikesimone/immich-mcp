@@ -1,0 +1,36 @@
+[project]
+name = "immich-mcp"
+version = "1.0.0"
+description = "MCP server for Immich: search, view, organize and upload photos from ChatGPT, Claude and other MCP clients, limited to albums you allow"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["immich", "mcp", "model-context-protocol", "photos", "chatgpt", "claude"]
+requires-python = ">=3.12"
+dependencies = [
+  "mcp==2.3.0",
+  "httpx==0.28.1",
+  "pyjwt[crypto]==2.15.1",
+  "uvicorn==0.54.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/mikesimone/immich-mcp"
+Issues = "https://github.com/mikesimone/immich-mcp/issues"
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-asyncio>=0.24", "respx>=0.22"]
+
+[project.scripts]
+immich-mcp = "immich_mcp.__main__:main"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["immich_mcp"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

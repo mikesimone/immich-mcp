@@ -1,0 +1,18 @@
+# Next to Immich's own compose file. Publish only on loopback (or put a reverse proxy / tunnel in front).
+services:
+  immich-mcp:
+    image: ghcr.io/mikesimone/immich-mcp:latest   # or: build: .
+    container_name: immich-mcp
+    restart: unless-stopped
+    env_file: immich-mcp.env                      # see immich-mcp.env.example; inside Docker use IMMICH_URL=http://immich_server:2283
+    environment:
+      ALLOWED_HOSTS: "127.0.0.1:8099,localhost:8099"
+    volumes:
+      - ./immich-mcp-data:/data
+      - ./secrets:/run/secrets:ro                 # immich-api-key, client-tokens (point IMMICH_API_KEY_FILE / TOKEN_FILE here)
+    ports:
+      - "127.0.0.1:8099:8099"
+networks:
+  default:
+    name: immich_default
+    external: true
