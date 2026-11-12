@@ -165,6 +165,12 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[test]' && .venv/bin/pytest 
 
 The tests run against an in-memory fake Immich (`tests/fakes.py`) and real Streamable HTTP; no Immich needed.
 
+## Credits
+
+Written predominantly by Claude (Anthropic's AI model, working in Claude Code), designed, directed, tested and
+maintained by Mike Simone. It's listed as Vibe-Coded on [awesome.immich.app](https://awesome.immich.app) for that reason.
+Issues and pull requests are welcome.
+
 ## License
 
 MIT
