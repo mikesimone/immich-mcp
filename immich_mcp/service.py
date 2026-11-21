@@ -292,7 +292,7 @@ class Service:
                                   timezone_name: str | None, pad_minutes: int | None,
                                   album_id: str | None = None, new_album: bool = False) -> dict:
         from zoneinfo import ZoneInfo
-        from .events import EventError, album_number, device_of, local_taken, parse_rules, pick_album, window
+        from .events import EventError, album_number, parse_rules, pick_album, rule_of, shot_time, window
         if not self.cfg.events_enabled:
             raise ToolFailure("not_configured", "event albums are not enabled on this server (EVENT_CAMERA_RULES)")
         title = (title or "").strip()
@@ -308,11 +308,15 @@ class Service:
             ws, we, all_day = window(start, end, tz, pad)
         except EventError as e:
             raise ToolFailure("bad_request", str(e))
-        # Query a day wider in UTC, then filter on the wall clock (events.local_taken).
+        # Query a day wider in UTC, then filter on the wall clock (events.shot_time).
         q_after = ws.replace(tzinfo=tz).astimezone(timezone.utc) - timedelta(days=1)
         q_before = we.replace(tzinfo=tz).astimezone(timezone.utc) + timedelta(days=1)
-        in_window = [a for a in await self._event_assets(q_after, q_before)
-                     if (t := local_taken(a)) is not None and ws <= t < we]
+
+        def inside(a: dict) -> bool:
+            t = shot_time(a, rule_of(a, rules))
+            return t is not None and ws <= t < we
+
+        in_window = [a for a in await self._event_assets(q_after, q_before) if inside(a)]
 
         all_albums = await self.immich.albums()
         excluded: set[str] = set()                   # the deny list still wins
@@ -321,9 +325,9 @@ class Service:
                 excluded |= {a["id"] for a in await self._event_assets(q_after, q_before, al["id"])}
         matched: list[tuple[dict, str]] = []
         for a in in_window:
-            d = device_of(a, rules)
-            if d and a["id"] not in excluded:
-                matched.append((a, d))
+            r = rule_of(a, rules)
+            if r and a["id"] not in excluded:
+                matched.append((a, r["device"]))
         by_device: dict[str, int] = {}
         for _, d in matched:
             by_device[d] = by_device.get(d, 0) + 1
@@ -339,11 +343,10 @@ class Service:
             sd, ed = (al.get("startDate") or "")[:10], (al.get("endDate") or "")[:10]
             if sd and ed and (ed < ws.date().isoformat() or sd > we.date().isoformat()):
                 continue
-            inside = [a for a in await self._event_assets(q_after, q_before, al["id"])
-                      if (t := local_taken(a)) is not None and ws <= t < we]
-            if inside:
-                candidates.append({"album_id": al["id"], "album_name": al["albumName"], "assets_in_window": len(inside),
-                                   "matched_already_in": len(idset & {a["id"] for a in inside})})
+            held = [a for a in await self._event_assets(q_after, q_before, al["id"]) if inside(a)]
+            if held:
+                candidates.append({"album_id": al["id"], "album_name": al["albumName"], "assets_in_window": len(held),
+                                   "matched_already_in": len(idset & {a["id"] for a in held})})
         candidates.sort(key=lambda c: -c["assets_in_window"])
 
         try:

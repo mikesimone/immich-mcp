@@ -18,23 +18,39 @@ class EventError(ValueError):
     pass
 
 
-RULE_KEYS = {"device", "exif_make", "exif_model_prefix", "filename_contains", "filename_prefix"}
+MATCH_KEYS = {"exif_make", "exif_model_prefix", "filename_contains", "filename_prefix", "filename_regex"}
+RULE_KEYS = {"device", "clock"} | MATCH_KEYS
+CLOCKS = {"filename"}
 
 
 def parse_rules(raw: str) -> tuple[dict, ...]:
-    """EVENT_CAMERA_RULES: JSON list of {"device": name, <one or more matchers>}; all matchers must hold."""
+    """EVENT_CAMERA_RULES: JSON list of {"device": name, <one or more matchers>, optional "clock"}; all matchers must
+    hold. filename_regex is a full match on the lower-cased base name. "clock": "filename" takes the shot's wall-clock
+    time from a leading YYYYMMDD_HHMMSS in the file name (cameras that write no usable time, e.g. glasses videos)."""
     if not raw.strip():
         return ()
     rules = json.loads(raw)
     if not isinstance(rules, list):
         raise EventError("EVENT_CAMERA_RULES must be a JSON list")
     for r in rules:
-        if not isinstance(r, dict) or not r.get("device") or set(r) - RULE_KEYS or len(set(r) - {"device"}) == 0:
-            raise EventError(f"bad camera rule {r!r}: needs device plus one of {sorted(RULE_KEYS - {'device'})}")
+        if not isinstance(r, dict) or not r.get("device") or set(r) - RULE_KEYS or not set(r) & MATCH_KEYS:
+            raise EventError(f"bad camera rule {r!r}: needs device plus one of {sorted(MATCH_KEYS)}")
+        if "clock" in r and r["clock"] not in CLOCKS:
+            raise EventError(f"bad camera rule {r!r}: clock must be one of {sorted(CLOCKS)}")
+        if "filename_regex" in r:
+            try:
+                re.compile(r["filename_regex"])
+            except re.error as e:
+                raise EventError(f"bad camera rule {r!r}: filename_regex: {e}") from None
     return tuple(rules)
 
 
 def device_of(asset: dict, rules: tuple[dict, ...]) -> str | None:
+    r = rule_of(asset, rules)
+    return r["device"] if r else None
+
+
+def rule_of(asset: dict, rules: tuple[dict, ...]) -> dict | None:
     ex = asset.get("exifInfo") or {}
     make = (ex.get("make") or "").strip().lower()
     model = (ex.get("model") or "").strip().lower()
@@ -49,8 +65,10 @@ def device_of(asset: dict, rules: tuple[dict, ...]) -> str | None:
             checks.append(r["filename_contains"].lower() in name)
         if "filename_prefix" in r:
             checks.append(name.startswith(r["filename_prefix"].lower()))
+        if "filename_regex" in r:
+            checks.append(re.fullmatch(r["filename_regex"], name, re.IGNORECASE) is not None)
         if checks and all(checks):
-            return r["device"]
+            return r
     return None
 
 
@@ -93,6 +111,29 @@ def local_taken(asset: dict) -> datetime | None:
     if not v:
         return None
     return datetime.fromisoformat(v.replace("Z", "+00:00")).replace(tzinfo=None)
+
+
+_NAME_CLOCK = re.compile(r"^(\d{8})_(\d{6})")
+
+
+def filename_taken(asset: dict) -> datetime | None:
+    m = _NAME_CLOCK.match(os.path.basename(asset.get("originalFileName") or ""))
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S")
+    except ValueError:
+        return None
+
+
+def shot_time(asset: dict, rule: dict | None) -> datetime | None:
+    """Wall-clock time of a shot: from the file name when its camera rule says clock=filename and the name parses,
+    else Immich's localDateTime."""
+    if rule and rule.get("clock") == "filename":
+        t = filename_taken(asset)
+        if t is not None:
+            return t
+    return local_taken(asset)
 
 
 def album_number(name: str, prefix: str) -> int | None:

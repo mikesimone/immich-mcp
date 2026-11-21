@@ -172,3 +172,45 @@ def test_numbering_block():
     assert pick_album([{"albumName": "010.021 - a", "id": "x"}], "010.", "New", 100, 199)[1] == "010.100 - New"
     with pytest.raises(EventError):
         pick_album([{"albumName": "010.199 - z", "id": "z"}], "010.", "New", 100, 199)
+
+
+GLASSES_NAME = r"\d{8}_\d{6}_[0-9a-f]{8}\.(jpg|mp4)"
+VIDEO_RULES = json.dumps([
+    {"device": "phone", "exif_make": "samsung", "exif_model_prefix": "SM-F966U", "clock": "filename"},
+    {"device": "phone", "exif_make": "samsung", "exif_model_prefix": "Galaxy Z Fold7", "clock": "filename"},
+    {"device": "glasses", "exif_make": "Meta"},
+    {"device": "glasses", "filename_regex": GLASSES_NAME, "clock": "filename"},
+])
+
+
+async def test_videos_without_exif_or_with_true_utc_match_by_filename(ecfg, fake):
+    """Meta's app writes glasses videos with no camera EXIF and a true-UTC time; the Fold7 tags its videos
+    'Galaxy Z Fold7' instead of SM-F966U. Both name files YYYYMMDD_HHMMSS in local time. Chat downloads match nothing."""
+    ecfg.event_camera_rules_json = VIDEO_RULES
+    ids = {
+        # glasses video: no EXIF, Immich time is real UTC (8 h ahead of the wall clock in the name)
+        "glasses_vid": shot(fake, None, "20261113_205746_6909cd7e.mp4", "2026-11-14T04:57:53.000Z"),
+        # phone video tagged by model name, Immich time drifted past the window; the name is right
+        "phone_vid": shot(fake, None, "20261113_223528.mp4", "2026-11-14T08:42:46.000Z", "Samsung", "Galaxy Z Fold7"),
+        "glasses_jpg": shot(fake, None, "20261113_194301_a246f893.jpg", "2026-11-13T19:43:02.776Z",
+                            "Meta", "Ray-Ban Meta Smart Glasses 2"),
+        "facebook": shot(fake, None, "Facebook_creation_4226777677606709.mp4", "2026-11-13T21:00:00.000Z"),
+        "copy": shot(fake, None, "Copy of QVZjdFJLM1RIdFNMU2ltSQ.mp4", "2026-11-13T21:00:00.000Z"),
+        "whatsapp": shot(fake, None, "VID-20261113-WA0004.mp4", "2026-11-13T21:00:00.000Z"),
+        "signal": shot(fake, None, "signal-2026-11-13-210000.mp4", "2026-11-13T21:00:00.000Z"),
+        "renamed_dl": shot(fake, None, "20261113_210000.mp4", "2026-11-13T21:00:00.000Z"),   # camera-style name, no EXIF
+    }
+    svc = make_service(ecfg, fake)
+    r = await run(svc, svc.file_event_pictures(title="Gary Numan", start=START, end="2026-11-13T22:45:00-08:00",
+                                               apply=True, timezone_name=None, pad_minutes=None, new_album=True))
+    assert set(r["asset_ids"]) == {ids["glasses_vid"], ids["phone_vid"], ids["glasses_jpg"]}
+    assert r["by_device"] == {"glasses": 2, "phone": 1}
+
+
+def test_rule_validation_for_new_keys():
+    assert parse_rules(VIDEO_RULES)
+    for bad in ([{"device": "x", "clock": "filename"}],                       # clock alone is not a matcher
+                [{"device": "x", "filename_regex": "a", "clock": "exif"}],
+                [{"device": "x", "filename_regex": "("}]):
+        with pytest.raises(EventError):
+            parse_rules(json.dumps(bad))

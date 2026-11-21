@@ -69,7 +69,8 @@ class Config:
 
     # Event albums (file_event_pictures): off unless EVENT_CAMERA_RULES is set. JSON list of rules naming the owner's
     # own cameras, e.g. [{"device":"phone","exif_make":"samsung","exif_model_prefix":"SM-F966U"},
-    # {"device":"glasses","exif_make":"Meta"},{"device":"spycam","filename_prefix":"SpyVideo"}]. The prefix must be allowed.
+    # {"device":"glasses","exif_make":"Meta"},{"device":"spycam","filename_prefix":"SpyVideo"}]. Matchers: exif_make, exif_model_prefix, filename_contains,
+    # filename_prefix, filename_regex; optional "clock":"filename" (see README). The prefix must be allowed.
     event_camera_rules_json: str = ""
     event_album_prefix: str = ""
     event_timezone: str = "UTC"

@@ -173,8 +173,14 @@ inside the window (the same event filed earlier under another name). If there ar
 `possible_duplicate` until you pass `album_id` (add to that album) or `new_album=true`.
 
 A rule matches when all its fields match, case-insensitive: `exif_make`, `exif_model_prefix`, `filename_contains`,
-`filename_prefix`. Shots are matched on the local wall clock (Immich `localDateTime`), because glasses and spy cams
-often write no zone offset. **Visibility:** this is the one tool that looks past the allow-list. It selects assets in
+`filename_prefix`, `filename_regex` (full match on the base name). Shots are matched on the local wall clock (Immich
+`localDateTime`), because glasses and spy cams often write no zone offset. A rule with `"clock":"filename"` takes the
+wall clock from a leading `YYYYMMDD_HHMMSS` in the file name instead (falling back to `localDateTime` if the name doesn't
+parse). Use it for cameras whose videos carry no camera EXIF or a time Immich places hours off: e.g. Ray-Ban Meta videos
+as the Meta app exports them have no EXIF but are named `YYYYMMDD_HHMMSS_<8 hex>.mp4` in local time, so
+`{"device":"glasses","filename_regex":"[0-9]{8}_[0-9]{6}_[0-9a-f]{8}[.](jpg|mp4)","clock":"filename"}` picks them up
+while chat downloads (`Facebook_creation_*`, `VID-*-WA*`, `signal-*`) match no rule. Avoid backslashes in the regex
+when the value goes through a systemd `EnvironmentFile` (`[.]`, `[0-9]` instead of `\.`, `\d`). **Visibility:** this is the one tool that looks past the allow-list. It selects assets in
 any album (or none) as long as they match a camera rule inside the event window, and makes them visible by putting
 them in an allowed album. The exclude list still wins, and hidden/locked/trashed assets are never touched.
 
