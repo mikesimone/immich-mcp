@@ -95,20 +95,26 @@ def local_taken(asset: dict) -> datetime | None:
     return datetime.fromisoformat(v.replace("Z", "+00:00")).replace(tzinfo=None)
 
 
-def pick_album(albums: list[dict], prefix: str, title: str) -> tuple[dict | None, str]:
-    """-> (existing album named for this event, or None; album name). New numbers are highest PREFIXnnn + 1."""
-    num_re = re.compile(r"^" + re.escape(prefix) + r"(\d{3})(?=\s|$)")
+def album_number(name: str, prefix: str) -> int | None:
+    m = re.match(r"^" + re.escape(prefix) + r"(\d{3})(?=\s|$)", name)
+    return int(m.group(1)) if m else None
+
+
+def pick_album(albums: list[dict], prefix: str, title: str, lo: int = 1, hi: int = 999) -> tuple[dict | None, str]:
+    """-> (existing album with exactly this title, or None; album name). New numbers are the highest PREFIXnnn inside
+    [lo, hi] + 1 (or lo), so an owner can keep events in one block (e.g. 010.100-199) beside other 010. albums."""
     want = title.strip().lower()
     used = []
     for a in albums:
-        m = num_re.match(a["albumName"])
-        if not m:
+        n = album_number(a["albumName"], prefix)
+        if n is None:
             continue
-        used.append(int(m.group(1)))
-        rest = re.sub(r"^-\s*", "", a["albumName"][m.end():].strip()).strip().lower()
+        if lo <= n <= hi:
+            used.append(n)
+        rest = re.sub(r"^\d{3}\s*-?\s*", "", a["albumName"][len(prefix):]).strip().lower()
         if rest == want:
             return a, a["albumName"]
-    n = max(used) + 1 if used else 1
-    if n > 999:
-        raise EventError(f"no {prefix}nnn numbers left")
+    n = max(used) + 1 if used else lo
+    if n > hi:
+        raise EventError(f"no free numbers left in {prefix}{lo:03d}-{prefix}{hi:03d}")
     return None, f"{prefix}{n:03d} - {title.strip()}"

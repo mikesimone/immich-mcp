@@ -289,9 +289,10 @@ class Service:
         return out
 
     async def file_event_pictures(self, *, title: str, start: str, end: str, apply: bool,
-                                  timezone_name: str | None, pad_minutes: int | None) -> dict:
+                                  timezone_name: str | None, pad_minutes: int | None,
+                                  album_id: str | None = None, new_album: bool = False) -> dict:
         from zoneinfo import ZoneInfo
-        from .events import EventError, device_of, local_taken, parse_rules, pick_album, window
+        from .events import EventError, album_number, device_of, local_taken, parse_rules, pick_album, window
         if not self.cfg.events_enabled:
             raise ToolFailure("not_configured", "event albums are not enabled on this server (EVENT_CAMERA_RULES)")
         title = (title or "").strip()
@@ -328,15 +329,46 @@ class Service:
             by_device[d] = by_device.get(d, 0) + 1
         ids = [a["id"] for a, _ in matched]
 
-        existing, album_name = pick_album(all_albums, self.cfg.event_album_prefix, title)
+        prefix = self.cfg.event_album_prefix
+        # Albums that already hold pictures from inside this window: probably this event under another name.
+        idset = set(ids)
+        candidates = []
+        for al in all_albums:
+            if album_number(al["albumName"], prefix) is None or not self.cfg.album_allowed(al["albumName"]):
+                continue
+            sd, ed = (al.get("startDate") or "")[:10], (al.get("endDate") or "")[:10]
+            if sd and ed and (ed < ws.date().isoformat() or sd > we.date().isoformat()):
+                continue
+            inside = [a for a in await self._event_assets(q_after, q_before, al["id"])
+                      if (t := local_taken(a)) is not None and ws <= t < we]
+            if inside:
+                candidates.append({"album_id": al["id"], "album_name": al["albumName"], "assets_in_window": len(inside),
+                                   "matched_already_in": len(idset & {a["id"] for a in inside})})
+        candidates.sort(key=lambda c: -c["assets_in_window"])
+
+        try:
+            existing, album_name = pick_album(all_albums, prefix, title, self.cfg.event_number_min, self.cfg.event_number_max)
+        except EventError as e:
+            raise ToolFailure("bad_request", str(e))
+        if album_id:
+            chosen = next((a for a in all_albums if a["id"] == album_id), None)
+            if not chosen or album_number(chosen["albumName"], prefix) is None or not self.cfg.album_allowed(chosen["albumName"]):
+                raise ToolFailure("bad_request", f"album_id must be an existing visible {prefix}nnn album")
+            existing, album_name = chosen, chosen["albumName"]
         if not self.cfg.album_allowed(album_name):
             raise ToolFailure("permission", f"{album_name!r} would not be a visible album")
         out = {"event": title, "window_start": ws.isoformat(), "window_end": we.isoformat(), "time_zone": tz.key,
                "all_day": all_day, "pad_minutes": 0 if all_day else pad, "album_name": album_name,
                "album_id": existing["id"] if existing else None, "album_existed": existing is not None,
                "matched": len(ids), "by_device": by_device, "skipped_excluded": len(excluded & {a["id"] for a in in_window}),
-               "in_window": len(in_window), "applied": False, "added": 0, "already_in_album": 0, "failed": 0,
-               "verified_in_album": 0, "asset_ids": []}
+               "in_window": len(in_window), "existing_candidates": candidates, "applied": False, "added": 0,
+               "already_in_album": 0, "failed": 0, "verified_in_album": 0, "asset_ids": []}
+        if apply and not existing and candidates and not new_album:
+            raise ToolFailure("possible_duplicate",
+                              "these albums already hold pictures from this event's window: "
+                              + "; ".join(f"{c['album_name']} ({c['album_id']}, {c['assets_in_window']} in window)" for c in candidates)
+                              + ". Pass album_id to add to one of them, or new_album=true to create "
+                              + album_name + " anyway. Ask the owner if unsure.")
         if not apply or not ids:
             return out
         if existing:

@@ -34,14 +34,17 @@ def shot(fake, album, name, local, make=None, model=None, vis="timeline", utc=No
 def ecfg(tmp_path):
     return Config(immich_api_key="test-key", state_dir=str(tmp_path), auth_mode="none",
                   allowed_album_prefixes=("010.", "Family - "), excluded_album_prefixes=("999.",),
-                  event_camera_rules_json=RULES, event_album_prefix="010.", event_timezone="America/Los_Angeles")
+                  event_camera_rules_json=RULES, event_album_prefix="010.", event_timezone="America/Los_Angeles",
+                  event_number_min=100, event_number_max=199)
 
 
 @pytest.fixture
 def scene(fake):
     camspy = fake.add_album("400.001 - Camspy")            # hidden album
-    fake.add_album("010.007 - Old")
-    fake.add_album("010.301 - Earlier event")
+    fake.add_album("010.021 - Old event block")
+    fake.add_album("010.119 - Kill Tony November 2026")
+    fake.add_album("010.200 - Anchorage")
+    fake.add_album("010.301 - Airport")
     fake.add_album("010.500.001 - nested, ignored")
     secret = fake.add_album("999.000 - Never")
     s = {
@@ -67,7 +70,8 @@ async def test_dry_run_changes_nothing(ecfg, fake, scene):
     before = {k: set(v) for k, v in fake.members.items()}
     r = await run(svc, svc.file_event_pictures(title="Gary Numan", start=START, end=END, apply=False,
                                                timezone_name=None, pad_minutes=None))
-    assert r["album_name"] == "010.302 - Gary Numan" and not r["album_existed"] and not r["applied"]
+    assert r["album_name"] == "010.120 - Gary Numan" and not r["album_existed"] and not r["applied"]
+    assert r["existing_candidates"] == []
     assert r["matched"] == 3 and r["by_device"] == {"phone": 1, "glasses": 1, "spycam": 1}
     assert r["skipped_excluded"] == 1 and r["asset_ids"] == []
     assert {k: set(v) for k, v in fake.members.items()} == before
@@ -134,3 +138,37 @@ def test_config_problems(ecfg):
     assert ecfg.problems() == []
     ecfg.event_album_prefix = "400."
     assert any("EVENT_ALBUM_PREFIX" in p for p in ecfg.problems())
+
+
+async def test_existing_album_for_event_is_found_not_duplicated(ecfg, fake, scene):
+    old = fake.add_album("010.118 - Gary Numan - November 2026")
+    fake.members[old].add(scene["phone"])
+    svc = make_service(ecfg, fake)
+    r = await run(svc, svc.file_event_pictures(title="Gary Numan North American Fall Tour 2026", start=START, end=END,
+                                               apply=False, timezone_name=None, pad_minutes=None))
+    assert r["album_name"] == "010.120 - Gary Numan North American Fall Tour 2026"
+    assert r["existing_candidates"] == [{"album_id": old, "album_name": "010.118 - Gary Numan - November 2026",
+                                         "assets_in_window": 1, "matched_already_in": 1}]
+    n_albums = len(fake.albums)
+    with pytest.raises(ToolFailure, match="possible_duplicate"):
+        await run(svc, svc.file_event_pictures(title="Gary Numan North American Fall Tour 2026", start=START, end=END,
+                                               apply=True, timezone_name=None, pad_minutes=None))
+    assert len(fake.albums) == n_albums
+    r = await run(svc, svc.file_event_pictures(title="Gary Numan North American Fall Tour 2026", start=START, end=END,
+                                               apply=True, timezone_name=None, pad_minutes=None, album_id=old))
+    assert r["album_id"] == old and r["added"] == 2 and r["already_in_album"] == 1 and r["verified_in_album"] == 3
+    assert len(fake.albums) == n_albums
+    r = await run(svc, svc.file_event_pictures(title="Gary Numan North American Fall Tour 2026", start=START, end=END,
+                                               apply=True, timezone_name=None, pad_minutes=None, new_album=True))
+    assert r["album_name"].startswith("010.120 ") and r["album_existed"] is False
+    with pytest.raises(ToolFailure, match="bad_request"):
+        await run(svc, svc.file_event_pictures(title="x", start=START, end=END, apply=False, timezone_name=None,
+                                               pad_minutes=None, album_id=scene["camspy"]))
+
+
+def test_numbering_block():
+    albums = [{"albumName": n, "id": n} for n in ("010.021 - a", "010.119 - b", "010.200 - c", "010.203.001 - d", "010.301 - e")]
+    assert pick_album(albums, "010.", "New", 100, 199)[1] == "010.120 - New"
+    assert pick_album([{"albumName": "010.021 - a", "id": "x"}], "010.", "New", 100, 199)[1] == "010.100 - New"
+    with pytest.raises(EventError):
+        pick_album([{"albumName": "010.199 - z", "id": "z"}], "010.", "New", 100, 199)

@@ -164,7 +164,13 @@ EVENT_CAMERA_RULES=[{"device":"phone","exif_make":"samsung","exif_model_prefix":
 EVENT_ALBUM_PREFIX=010.            # must be an allowed prefix
 EVENT_TIMEZONE=America/Los_Angeles # default zone for events; per-call time_zone overrides
 EVENT_PAD_MINUTES=30               # added before and after timed events
+EVENT_NUMBER_MIN=100               # optional: number new event albums only inside this block
+EVENT_NUMBER_MAX=199               #   (e.g. events 010.100-199 beside places in 010.200-299)
 ```
+
+**No duplicate albums:** the dry run lists `existing_candidates`, event-prefix albums that already hold pictures from
+inside the window (the same event filed earlier under another name). If there are any, `apply=true` refuses with
+`possible_duplicate` until you pass `album_id` (add to that album) or `new_album=true`.
 
 A rule matches when all its fields match, case-insensitive: `exif_make`, `exif_model_prefix`, `filename_contains`,
 `filename_prefix`. Shots are matched on the local wall clock (Immich `localDateTime`), because glasses and spy cams

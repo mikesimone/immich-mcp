@@ -74,6 +74,8 @@ class Config:
     event_album_prefix: str = ""
     event_timezone: str = "UTC"
     event_pad_minutes: int = 30
+    event_number_min: int = 1          # new event albums are numbered inside [min, max] only
+    event_number_max: int = 999
 
     # Extra server instructions appended for clients (e.g. "new memes go to album X").
     instructions_extra: str = ""
@@ -110,6 +112,8 @@ class Config:
         c.event_album_prefix = e("EVENT_ALBUM_PREFIX", "")
         c.event_timezone = e("EVENT_TIMEZONE", c.event_timezone)
         c.event_pad_minutes = int(e("EVENT_PAD_MINUTES", c.event_pad_minutes))
+        c.event_number_min = int(e("EVENT_NUMBER_MIN", c.event_number_min))
+        c.event_number_max = int(e("EVENT_NUMBER_MAX", c.event_number_max))
         return c
 
     def api_key(self) -> str:
@@ -147,6 +151,8 @@ class Config:
                 out.append(f"EVENT_CAMERA_RULES: {ex}")
             if not self.event_album_prefix or not self.album_allowed(self.event_album_prefix + "000 x"):
                 out.append("EVENT_CAMERA_RULES is set but EVENT_ALBUM_PREFIX is missing or not an allowed album prefix")
+            if not 0 <= self.event_number_min <= self.event_number_max <= 999:
+                out.append("EVENT_NUMBER_MIN/MAX must satisfy 0 <= min <= max <= 999")
             try:
                 from zoneinfo import ZoneInfo
                 ZoneInfo(self.event_timezone)

@@ -208,6 +208,7 @@ class EventPicturesOut(TypedDict):
     matched: int
     by_device: dict[str, int]
     skipped_excluded: int
+    existing_candidates: list[dict]
     applied: bool
     added: int
     already_in_album: int
@@ -668,7 +669,10 @@ def build(service: Service) -> MCPServer:
                           "its album and only adds what's new. Assets are only ADDED: they stay in every album they are "
                           "already in and their archive state is not changed. apply=false (default) is a dry run that "
                           "reports counts per camera and the album name without changing anything; run it first, then "
-                          "apply=true. Shots are matched on the local wall-clock time, padded before and after timed events.")
+                          "apply=true. Shots are matched on the local wall-clock time, padded before and after timed events. "
+                          "The dry run also lists existing_candidates: albums that already hold pictures from inside the "
+                          "window (probably this event under another name). If there are any, apply=true refuses until you "
+                          "pass album_id (add to that album) or new_album=true; ask the owner which when unsure.")
         async def file_event_pictures(
                 title: Annotated[str, Field(description="Event title, used verbatim in the album name", min_length=1, max_length=150)],
                 start: Annotated[str, Field(description="Event start: ISO date-time with offset, or YYYY-MM-DD for all-day")],
@@ -676,8 +680,11 @@ def build(service: Service) -> MCPServer:
                 apply: Annotated[bool, Field(description="false = dry run (default); true = create the album and add the assets")] = False,
                 time_zone: Annotated[Optional[str], Field(description="IANA zone the event happened in; default is the server's")] = None,
                 pad_minutes: Annotated[Optional[int], Field(description="Minutes added before and after a timed event", ge=0, le=720)] = None,
+                album_id: Annotated[Optional[str], Field(description="Add to this existing event album instead (e.g. one listed in existing_candidates)")] = None,
+                new_album: Annotated[bool, Field(description="Create a new album even though existing_candidates is not empty")] = False,
                 ) -> EventPicturesOut:
             return await run(service.file_event_pictures(title=title, start=start, end=end, apply=apply,
-                                                         timezone_name=time_zone, pad_minutes=pad_minutes))
+                                                         timezone_name=time_zone, pad_minutes=pad_minutes,
+                                                         album_id=album_id, new_album=new_album))
 
     return mcp
