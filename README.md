@@ -56,6 +56,7 @@ If you use ChatGPT, everything a tool returns, images included, goes to OpenAI. 
 | `create_share_link` / `revoke_share_link` | Expiring public links (opt-in, `confirm=true`) |
 | `get_duplicates` | Immich's duplicate groups among visible photos |
 | `delete_assets` | Move to Immich's trash (restorable for 30 days), `confirm=true` |
+| `file_event_pictures` | Opt-in: everything *your own cameras* shot during an event (e.g. a calendar entry) into the next numbered album; dry run by default |
 
 All tools have typed inputs and outputs. Errors come back as results with `{"error": kind, "message": ...}` where kind
 is one of `auth`, `permission`, `not_found`, `bad_request`, `unsupported_media`, `too_large`, `blocked_url`, `network`,
@@ -148,11 +149,36 @@ asked to dedupe by checksum, the result is recorded in a small SQLite ledger (`S
 tracked separately, so a retry only redoes what's missing. Nothing is reported as uploaded until Immich returns an
 asset ID.
 
+## Event albums (opt-in)
+
+`file_event_pictures(title, start, end, apply)` makes an album of what your own cameras shot during an event: give it
+the calendar entry's title and its start/end (ISO date-times with offset, or dates for an all-day event, end
+exclusive). It names the album `<EVENT_ALBUM_PREFIX>nnn - <title>` with the next free number, reuses that album if
+you run it again for the same title, and only **adds**: assets stay in every album they are in and their archive state
+is unchanged. `apply=false` (the default) is a dry run with counts per camera.
+
+Off unless `EVENT_CAMERA_RULES` is set (the tool isn't even listed otherwise):
+
+```
+EVENT_CAMERA_RULES=[{"device":"phone","exif_make":"samsung","exif_model_prefix":"SM-F966U"},{"device":"glasses","exif_make":"Meta"},{"device":"spycam","filename_prefix":"SpyVideo"}]
+EVENT_ALBUM_PREFIX=010.            # must be an allowed prefix
+EVENT_TIMEZONE=America/Los_Angeles # default zone for events; per-call time_zone overrides
+EVENT_PAD_MINUTES=30               # added before and after timed events
+```
+
+A rule matches when all its fields match, case-insensitive: `exif_make`, `exif_model_prefix`, `filename_contains`,
+`filename_prefix`. Shots are matched on the local wall clock (Immich `localDateTime`), because glasses and spy cams
+often write no zone offset. **Visibility:** this is the one tool that looks past the allow-list. It selects assets in
+any album (or none) as long as they match a camera rule inside the event window, and makes them visible by putting
+them in an allowed album. The exclude list still wins, and hidden/locked/trashed assets are never touched.
+
 ## Security notes
 
 - Listener on loopback by default, DNS-rebinding protection via `ALLOWED_HOSTS`.
 - Per-client tokens compared in constant time, or Cloudflare Access JWTs verified against the team's keys.
 - A JSON audit line (`immich_mcp.audit` logger) for every write, delete, tag change and share link, with the client.
+- `file_event_pictures` (opt-in) is the only tool that selects assets outside the allow-list, by camera rule and time
+  window only; see "Event albums". The exclude list still applies.
 - Deletes are always `force=false` (trash). Locked-folder assets are never shown and never changed.
 - Share links are off unless `ENABLE_SHARE_LINKS=true`, always hide metadata, expire (max `SHARE_LINK_MAX_HOURS`,
   default 720), and can only be revoked if this server created them.

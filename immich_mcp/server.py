@@ -194,6 +194,28 @@ class MembershipRow(TypedDict):
     error: Optional[str]
 
 
+class EventPicturesOut(TypedDict):
+    event: str
+    window_start: str
+    window_end: str
+    time_zone: str
+    all_day: bool
+    pad_minutes: int
+    album_name: str
+    album_id: Optional[str]
+    album_existed: bool
+    in_window: int
+    matched: int
+    by_device: dict[str, int]
+    skipped_excluded: int
+    applied: bool
+    added: int
+    already_in_album: int
+    failed: int
+    verified_in_album: int
+    asset_ids: list[str]
+
+
 class MembershipOut(TypedDict):
     album_id: str
     album_name: str
@@ -635,5 +657,27 @@ def build(service: Service) -> MCPServer:
               description="Move visible assets to Immich's trash (restorable for 30 days; never permanent). Requires confirm=true.")
     async def delete_assets(asset_ids: AssetIds, confirm: Confirm = False) -> TrashOut:
         return await run(service.delete_assets(asset_ids, confirm))
+
+    if service.cfg.events_enabled:
+        @tool(title="File an event's pictures into a new album", annotations=WRITE,
+              description="Make an album of everything the owner's own cameras (configured on the server: phone, glasses, "
+                          "etc., matched by EXIF make/model or filename) shot during an event, e.g. a calendar entry. Give "
+                          "the event's title and its start/end exactly as the calendar has them: ISO date-times with "
+                          "offset, or dates for an all-day event (end date exclusive). The album gets the next free "
+                          f"number, '{service.cfg.event_album_prefix}nnn - <title>'; re-running for the same title reuses "
+                          "its album and only adds what's new. Assets are only ADDED: they stay in every album they are "
+                          "already in and their archive state is not changed. apply=false (default) is a dry run that "
+                          "reports counts per camera and the album name without changing anything; run it first, then "
+                          "apply=true. Shots are matched on the local wall-clock time, padded before and after timed events.")
+        async def file_event_pictures(
+                title: Annotated[str, Field(description="Event title, used verbatim in the album name", min_length=1, max_length=150)],
+                start: Annotated[str, Field(description="Event start: ISO date-time with offset, or YYYY-MM-DD for all-day")],
+                end: Annotated[str, Field(description="Event end: ISO date-time with offset, or YYYY-MM-DD (exclusive) for all-day")],
+                apply: Annotated[bool, Field(description="false = dry run (default); true = create the album and add the assets")] = False,
+                time_zone: Annotated[Optional[str], Field(description="IANA zone the event happened in; default is the server's")] = None,
+                pad_minutes: Annotated[Optional[int], Field(description="Minutes added before and after a timed event", ge=0, le=720)] = None,
+                ) -> EventPicturesOut:
+            return await run(service.file_event_pictures(title=title, start=start, end=end, apply=apply,
+                                                         timezone_name=time_zone, pad_minutes=pad_minutes))
 
     return mcp

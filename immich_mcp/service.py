@@ -267,6 +267,99 @@ class Service:
             {"asset_id": r["id"], "status": "removed" if r.get("success") else "failed",
              "error": None if r.get("success") else r.get("error")} for r in res]}
 
+    # ------------------------------------------------------------------ event albums
+    async def _scan(self, body: dict) -> list[dict]:
+        out, page = [], 1
+        while page:
+            r = await self.immich.search_metadata({**body, "size": 1000, "page": page})
+            out += r["items"]
+            page = int(r["nextPage"]) if r.get("nextPage") else 0
+        return out
+
+    async def _event_assets(self, after: datetime, before: datetime, album_id: str | None = None) -> list[dict]:
+        seen, out = set(), []
+        for vis in ("timeline", "archive"):          # never hidden (live-photo motion parts) or locked
+            body = {"takenAfter": after.isoformat().replace("+00:00", "Z"),
+                    "takenBefore": before.isoformat().replace("+00:00", "Z"), "visibility": vis, "withExif": True}
+            if album_id:
+                body["albumIds"] = [album_id]
+            for a in await self._scan(body):
+                if a["id"] not in seen and not a.get("isTrashed"):
+                    seen.add(a["id"]); out.append(a)
+        return out
+
+    async def file_event_pictures(self, *, title: str, start: str, end: str, apply: bool,
+                                  timezone_name: str | None, pad_minutes: int | None) -> dict:
+        from zoneinfo import ZoneInfo
+        from .events import EventError, device_of, local_taken, parse_rules, pick_album, window
+        if not self.cfg.events_enabled:
+            raise ToolFailure("not_configured", "event albums are not enabled on this server (EVENT_CAMERA_RULES)")
+        title = (title or "").strip()
+        if not title:
+            raise ToolFailure("bad_request", "title is required")
+        try:
+            tz = ZoneInfo(timezone_name or self.cfg.event_timezone)
+        except Exception:
+            raise ToolFailure("bad_request", f"unknown time zone {timezone_name!r}")
+        pad = self.cfg.event_pad_minutes if pad_minutes is None else pad_minutes
+        try:
+            rules = parse_rules(self.cfg.event_camera_rules_json)
+            ws, we, all_day = window(start, end, tz, pad)
+        except EventError as e:
+            raise ToolFailure("bad_request", str(e))
+        # Query a day wider in UTC, then filter on the wall clock (events.local_taken).
+        q_after = ws.replace(tzinfo=tz).astimezone(timezone.utc) - timedelta(days=1)
+        q_before = we.replace(tzinfo=tz).astimezone(timezone.utc) + timedelta(days=1)
+        in_window = [a for a in await self._event_assets(q_after, q_before)
+                     if (t := local_taken(a)) is not None and ws <= t < we]
+
+        all_albums = await self.immich.albums()
+        excluded: set[str] = set()                   # the deny list still wins
+        for al in all_albums:
+            if self.cfg.album_excluded(al["albumName"]):
+                excluded |= {a["id"] for a in await self._event_assets(q_after, q_before, al["id"])}
+        matched: list[tuple[dict, str]] = []
+        for a in in_window:
+            d = device_of(a, rules)
+            if d and a["id"] not in excluded:
+                matched.append((a, d))
+        by_device: dict[str, int] = {}
+        for _, d in matched:
+            by_device[d] = by_device.get(d, 0) + 1
+        ids = [a["id"] for a, _ in matched]
+
+        existing, album_name = pick_album(all_albums, self.cfg.event_album_prefix, title)
+        if not self.cfg.album_allowed(album_name):
+            raise ToolFailure("permission", f"{album_name!r} would not be a visible album")
+        out = {"event": title, "window_start": ws.isoformat(), "window_end": we.isoformat(), "time_zone": tz.key,
+               "all_day": all_day, "pad_minutes": 0 if all_day else pad, "album_name": album_name,
+               "album_id": existing["id"] if existing else None, "album_existed": existing is not None,
+               "matched": len(ids), "by_device": by_device, "skipped_excluded": len(excluded & {a["id"] for a in in_window}),
+               "in_window": len(in_window), "applied": False, "added": 0, "already_in_album": 0, "failed": 0,
+               "verified_in_album": 0, "asset_ids": []}
+        if not apply or not ids:
+            return out
+        if existing:
+            album = existing
+        else:
+            album = await self.immich.create_album(album_name, f"{title} ({ws:%Y-%m-%d}). Filed by file_event_pictures.")
+            audit("create_album", album_id=album["id"], name=album_name, via="file_event_pictures")
+        res = []
+        for i in range(0, len(ids), 500):
+            res += await self.immich.add_to_album(album["id"], ids[i:i + 500]) or []
+        # Intentionally bypasses policy.require_assets: these are the owner's own camera shots, selected by rule, and
+        # they become visible by landing in an allowed album.
+        audit("file_event_pictures", album_id=album["id"], album_name=album_name, event=title,
+              window=[ws.isoformat(), we.isoformat(), tz.key], asset_ids=ids, by_device=by_device)
+        self.policy.invalidate()
+        now_in = {a["id"] for a in await self._event_assets(q_after, q_before, album["id"])}
+        out.update(applied=True, album_id=album["id"],
+                   added=sum(1 for r in res if r.get("success")),
+                   already_in_album=sum(1 for r in res if not r.get("success") and r.get("error") == "duplicate"),
+                   failed=sum(1 for r in res if not r.get("success") and r.get("error") != "duplicate"),
+                   verified_in_album=len(set(ids) & now_in), asset_ids=sorted(set(ids) & now_in))
+        return out
+
     # ------------------------------------------------------------------ asset changes
     async def set_caption(self, asset_ids: list[str], caption: str, mode: str) -> dict:
         """Edit only the caption part of each description; a generation-info section after GEN_INFO_SEPARATOR

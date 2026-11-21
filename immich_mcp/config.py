@@ -67,6 +67,14 @@ class Config:
     share_link_max_hours: int = 720
     max_batch_items: int = 50
 
+    # Event albums (file_event_pictures): off unless EVENT_CAMERA_RULES is set. JSON list of rules naming the owner's
+    # own cameras, e.g. [{"device":"phone","exif_make":"samsung","exif_model_prefix":"SM-F966U"},
+    # {"device":"glasses","exif_make":"Meta"},{"device":"spycam","filename_prefix":"SpyVideo"}]. The prefix must be allowed.
+    event_camera_rules_json: str = ""
+    event_album_prefix: str = ""
+    event_timezone: str = "UTC"
+    event_pad_minutes: int = 30
+
     # Extra server instructions appended for clients (e.g. "new memes go to album X").
     instructions_extra: str = ""
 
@@ -98,6 +106,10 @@ class Config:
         c.public_immich_url = e("PUBLIC_IMMICH_URL", c.public_immich_url).rstrip("/")
         c.share_link_max_hours = int(e("SHARE_LINK_MAX_HOURS", c.share_link_max_hours))
         c.max_batch_items = int(e("MAX_BATCH_ITEMS", c.max_batch_items))
+        c.event_camera_rules_json = e("EVENT_CAMERA_RULES", "")
+        c.event_album_prefix = e("EVENT_ALBUM_PREFIX", "")
+        c.event_timezone = e("EVENT_TIMEZONE", c.event_timezone)
+        c.event_pad_minutes = int(e("EVENT_PAD_MINUTES", c.event_pad_minutes))
         return c
 
     def api_key(self) -> str:
@@ -127,4 +139,21 @@ class Config:
             out.append("AUTH_MODE includes token but TOKEN_FILE is not set")
         if "cloudflare" in modes and not (self.cf_team_domain and self.cf_audience and self.allowed_emails):
             out.append("AUTH_MODE includes cloudflare but CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD and ALLOWED_EMAILS are not all set")
+        if self.event_camera_rules_json.strip():
+            from .events import EventError, parse_rules
+            try:
+                parse_rules(self.event_camera_rules_json)
+            except (EventError, ValueError) as ex:
+                out.append(f"EVENT_CAMERA_RULES: {ex}")
+            if not self.event_album_prefix or not self.album_allowed(self.event_album_prefix + "000 x"):
+                out.append("EVENT_CAMERA_RULES is set but EVENT_ALBUM_PREFIX is missing or not an allowed album prefix")
+            try:
+                from zoneinfo import ZoneInfo
+                ZoneInfo(self.event_timezone)
+            except Exception:
+                out.append(f"EVENT_TIMEZONE {self.event_timezone!r} is not an IANA zone")
         return out
+
+    @property
+    def events_enabled(self) -> bool:
+        return bool(self.event_camera_rules_json.strip())
